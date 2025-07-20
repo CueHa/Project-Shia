@@ -1,0 +1,822 @@
+package nz.ac.auckland.se281.algorithms;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import nz.ac.auckland.se281.model.Continent;
+import nz.ac.auckland.se281.model.Country;
+
+/**
+ * Utility class that finds the shortest route (fewest countries) between two {@link Country} nodes
+ * and gathers fuel statistics about that route.
+ *
+ * <p>Design notes:
+ *
+ * <ul>
+ *   <li>Stateless -- all functionality is exposed through one static method.
+ *   <li>Uses breadth-first search (BFS) because the graph is un-weighted and we need the
+ *       minimal-hop path.
+ *   <li>Neighbour iteration order is preserved by {@code Country.getNeighbours()} so the
+ *       <em>first</em> shortest path found matches the CSV order.
+ * </ul>
+ */
+public final class PathFinder {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // static methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Computes the first breadth-first shortest path between {@code source} and {@code destination},
+   * the total fuel for interior countries, the per-continent fuel totals in first-appearance order,
+   * and which continent incurred the most fuel (first in list wins ties).
+   *
+   * @param source starting country (included in the returned path)
+   * @param destination ending country (included in the returned path)
+   * @return a {@link RouteResult} containing path and statistics
+   */
+  public static RouteResult shortestRoute(Country source, Country destination) {
+
+    /* ---------- 1. Breadth-first search ---------- */
+    Map<Country, Country> predecessor = new HashMap<>(); // child → parent
+    Queue<Country> queue = new LinkedList<>();
+
+    predecessor.put(source, null);
+    queue.add(source);
+
+    while (!queue.isEmpty() && !predecessor.containsKey(destination)) {
+      Country current = queue.poll();
+
+      for (Country neighbor : current.getNeighbours()) {
+        if (predecessor.containsKey(neighbor)) {
+          continue; // already discovered
+        }
+        predecessor.put(neighbor, current);
+        queue.add(neighbor);
+
+        if (neighbor.equals(destination)) {
+          break; // early exit once target seen
+        }
+      }
+    }
+
+    /* ---------- 2. Reconstruct path (Country objects) ---------- */
+    List<Country> routeCountries = new ArrayList<>();
+    if (predecessor.containsKey(destination)) {
+      for (Country step = destination; step != null; step = predecessor.get(step)) {
+        routeCountries.add(0, step); // prepend while back-tracking
+      }
+    } else { // safety-net (graph should be connected)
+      routeCountries.add(source);
+      routeCountries.add(destination);
+    }
+
+    /* ---------- 3. Total fuel for interior countries ---------- */
+    int totalFuel = 0;
+    for (int i = 1; i < routeCountries.size() - 1; i++) {
+      totalFuel += routeCountries.get(i).getFuelCost();
+    }
+
+    /* ---------- 4. Fuel by continent, first-visit order ---------- */
+    Map<Continent, Integer> fuelByContinent = new LinkedHashMap<>();
+    for (int i = 0; i < routeCountries.size(); i++) {
+      Country country = routeCountries.get(i);
+      Continent continent = country.getContinent();
+
+      fuelByContinent.putIfAbsent(continent, 0); // first encounter
+
+      if (i != 0 && i != routeCountries.size() - 1) { // interior only
+        fuelByContinent.put(continent, fuelByContinent.get(continent) + country.getFuelCost());
+      }
+    }
+
+    /* ---------- 5. Format continent list & pick max ---------- */
+    List<String> continentFuelFormatted = new ArrayList<>();
+    Continent maxFuelContinent = null;
+
+    for (Map.Entry<Continent, Integer> entry : fuelByContinent.entrySet()) {
+      Continent continent = entry.getKey();
+      int fuel = entry.getValue();
+
+      StringBuilder sb = new StringBuilder();
+      sb.append(continent).append(" (").append(fuel).append(')');
+      continentFuelFormatted.add(sb.toString());
+
+      if (maxFuelContinent == null || fuel > fuelByContinent.get(maxFuelContinent)) {
+        maxFuelContinent = continent; // first-seen wins ties
+      }
+    }
+
+    StringBuilder maxContinentBuilder = new StringBuilder();
+    maxContinentBuilder
+        .append(maxFuelContinent)
+        .append(" (")
+        .append(fuelByContinent.get(maxFuelContinent))
+        .append(')');
+    String mostExpensiveContinentFormatted = maxContinentBuilder.toString();
+
+    /* ---------- 6. Convert route to list of names ---------- */
+    List<String> countryNames = routeCountries.stream().map(Country::getName).toList();
+
+    return new RouteResult(
+        countryNames, totalFuel, continentFuelFormatted, mostExpensiveContinentFormatted);
+  }
+
+  // private constructor to prevent instantiation
+  private PathFinder() {}
+}
+
+
+---------------------------
+RouteResult.java
+---------------------------
+package nz.ac.auckland.se281.algorithms;
+
+import java.util.List;
+
+/**
+ * Immutable data-transfer object returned by {@link PathFinder}.
+ *
+ * <p>Fields are intentionally public & final so callers can read them without accessor boilerplate;
+ * the object is still safe because everything is initialised once in the constructor and never
+ * changes afterwards.
+ */
+public final class RouteResult {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance fields
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Ordered list of country names from source to destination (both inclusive). */
+  public final List<String> countryPath;
+
+  /** Sum of fuel costs for all interior countries in {@link #countryPath}. */
+  public final int totalFuel;
+
+  /**
+   * Continents, in first-visited order, formatted as {@code "Continent (fuel)"} strings, e.g.
+   * {@code ["Asia (6)", "Europe (4)"]}.
+   */
+  public final List<String> continentFuelFormatted;
+
+  /**
+   * The first continent with the highest fuel total, formatted the same way as the entries in
+   * {@link #continentFuelFormatted}, e.g. {@code "Asia (6)"}.
+   */
+  public final String mostExpensiveContinentFormatted;
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // constructors
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Creates a new immutable result container.
+   *
+   * @param countryPath ordered list of country names, source → destination
+   * @param totalFuel fuel spent on interior countries
+   * @param continentFuelFormatted formatted strings of continent fuel totals
+   * @param mostExpensiveContinentFormatted formatted string for the max-fuel continent
+   */
+  public RouteResult(
+      List<String> countryPath,
+      int totalFuel,
+      List<String> continentFuelFormatted,
+      String mostExpensiveContinentFormatted) {
+
+    this.countryPath = countryPath;
+    this.totalFuel = totalFuel;
+    this.continentFuelFormatted = continentFuelFormatted;
+    this.mostExpensiveContinentFormatted = mostExpensiveContinentFormatted;
+  }
+}
+
+
+---------------------------
+InvalidCountryException.java
+---------------------------
+package nz.ac.auckland.se281.exception;
+
+public class InvalidCountryException extends Exception {
+  public InvalidCountryException(String message) {
+    super(message);
+  }
+}
+
+
+---------------------------
+Continent.java
+---------------------------
+package nz.ac.auckland.se281.model;
+
+/**
+ * Enumeration of the six Risk-map continents.
+ *
+ * <p>The {@link #toString()} method converts the enum constant to a reader-friendly form, turning
+ * {@code NORTH_AMERICA} into&nbsp;{@code "North America"} and so on.
+ */
+public enum Continent {
+  AFRICA,
+  ASIA,
+  EUROPE,
+  NORTH_AMERICA,
+  SOUTH_AMERICA,
+  AUSTRALIA;
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Converts the enum constant to title-case with spaces.
+   *
+   * @return the continent name in human-readable form
+   */
+  @Override
+  public String toString() {
+    String lowercaseName = name().toLowerCase().replace('_', ' ');
+
+    StringBuilder formattedName = new StringBuilder();
+    for (String token : lowercaseName.split(" ")) {
+      if (!token.isEmpty()) {
+        formattedName
+            .append(Character.toUpperCase(token.charAt(0)))
+            .append(token.substring(1))
+            .append(' ');
+      }
+    }
+    return formattedName.toString().trim();
+  }
+}
+
+
+---------------------------
+Country.java
+---------------------------
+package nz.ac.auckland.se281.model;
+
+import java.util.LinkedHashSet;
+import java.util.Set;
+
+/**
+ * Immutable domain object representing a single Risk-map country.
+ *
+ * <p>Neighbour references are stored in a {@link LinkedHashSet} so the insertion order—taken
+ * directly from <em>adjacencies.csv</em>—is preserved for consistent BFS traversal and for display.
+ */
+public class Country {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance fields
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Canonical country name as it appears in the CSV. */
+  private final String name;
+
+  /** Continent to which the country belongs. */
+  private final Continent continent;
+
+  /** Fuel cost required to traverse this country. */
+  private final int fuelCost;
+
+  /** Adjacent countries, stored in first-listed order. */
+  private final Set<Country> adjacentCountries = new LinkedHashSet<>();
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // constructors
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Creates a country node.
+   *
+   * @param name the country name
+   * @param continent its continent
+   * @param fuelCost fuel cost to cross the country
+   */
+  public Country(String name, Continent continent, int fuelCost) {
+    this.name = name;
+    this.continent = continent;
+    this.fuelCost = fuelCost;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * @return the country name
+   */
+  public String getName() {
+    return name;
+  }
+
+  /**
+   * @return the continent of this country
+   */
+  public Continent getContinent() {
+    return continent;
+  }
+
+  /**
+   * @return fuel cost to traverse the country
+   */
+  public int getFuelCost() {
+    return fuelCost;
+  }
+
+  /**
+   * @return unmodifiable view of adjacent countries (order preserved)
+   */
+  public Set<Country> getNeighbours() {
+    return adjacentCountries;
+  }
+
+  /**
+   * Adds a neighbour to this country.
+   *
+   * @param neighbour another country directly connected to this one
+   */
+  public void addNeighbour(Country neighbour) {
+    adjacentCountries.add(neighbour);
+  }
+
+  /** Returns the country name when printed. */
+  @Override
+  public String toString() {
+    return name;
+  }
+}
+
+
+---------------------------
+WorldGraph.java
+---------------------------
+package nz.ac.auckland.se281.model;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import nz.ac.auckland.se281.exception.InvalidCountryException;
+
+/**
+ * Directed graph of {@link Country} nodes keyed by their canonical names.
+ *
+ * <p>The graph is built once from the <em>countries.csv</em> and <em>adjacencies.csv</em> files via
+ * {@link #fromCsvLines(List, List)} and is then queried read-only.
+ */
+public class WorldGraph {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // static methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Factory helper that converts raw CSV line lists into a populated {@code WorldGraph}.
+   *
+   * @param countryLines each line "Name,Continent,Fuel"
+   * @param adjacencyLines each line "Country,Neighbour1,Neighbour2,…"
+   * @return fully initialised graph
+   */
+  public static WorldGraph fromCsvLines(List<String> countryLines, List<String> adjacencyLines) {
+
+    WorldGraph graph = new WorldGraph();
+    graph.parseCountries(countryLines);
+    graph.parseAdjacencies(adjacencyLines);
+    return graph;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance fields
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Map key: trimmed country name; value: country node. */
+  private final Map<String, Country> countriesByName = new HashMap<>();
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // constructors
+  // ──────────────────────────────────────────────────────────────────────────
+
+  private WorldGraph() {
+    /* use factory */
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Finds a country node by its canonical name.
+   *
+   * @param nameKey name exactly as stored in the CSV (trimmed but case-sensitive)
+   * @return matching {@link Country}
+   * @throws InvalidCountryException if the name is not present
+   */
+  public Country find(String nameKey) throws InvalidCountryException {
+    Country country = countriesByName.get(trim(nameKey));
+    if (country == null) {
+      throw new InvalidCountryException(nameKey);
+    }
+    return country;
+  }
+
+  // ── private helpers ──────────────────────────────────────────────────────
+
+  private void parseCountries(List<String> countryLines) {
+    for (String line : countryLines) {
+      if (line.isBlank()) {
+        continue;
+      }
+      String[] parts = line.split(",");
+      if (parts.length != 3) {
+        continue; // malformed, skip
+      }
+
+      String name = parts[0].trim();
+      String continentCsv = parts[1].trim();
+      int fuelCost = Integer.parseInt(parts[2].trim());
+
+      String continentKey = continentCsv.toUpperCase().replace(' ', '_');
+      Continent continent = Continent.valueOf(continentKey);
+
+      countriesByName.put(trim(name), new Country(name, continent, fuelCost));
+    }
+  }
+
+  private void parseAdjacencies(List<String> adjacencyLines) {
+    for (String line : adjacencyLines) {
+      if (line.isBlank()) {
+        continue;
+      }
+      String[] parts = line.split(",");
+      if (parts.length < 2) {
+        continue; // no neighbours
+      }
+
+      String rootName = parts[0].trim();
+      Country rootCountry = countriesByName.get(trim(rootName));
+      if (rootCountry == null) {
+        continue; // unknown root
+      }
+
+      for (int i = 1; i < parts.length; i++) {
+        String neighbourName = parts[i].trim();
+        Country neighbour = countriesByName.get(trim(neighbourName));
+        if (neighbour != null) {
+          rootCountry.addNeighbour(neighbour); // preserve file order
+        }
+      }
+    }
+  }
+
+  private static String trim(String text) {
+    return text == null ? "" : text.trim();
+  }
+}
+
+
+---------------------------
+CountryInputHelper.java
+---------------------------
+package nz.ac.auckland.se281.util;
+
+import nz.ac.auckland.se281.MessageCli;
+import nz.ac.auckland.se281.Utils;
+import nz.ac.auckland.se281.exception.InvalidCountryException;
+import nz.ac.auckland.se281.model.Country;
+import nz.ac.auckland.se281.model.WorldGraph;
+
+/**
+ * Utility class that repeatedly prompts the user for a country name until the name is recognised by
+ * the supplied {@link WorldGraph}.
+ *
+ * <p>The scanner I/O, capitalisation logic, and retry loop are centralised here so that commands in
+ * {@code MapEngine} can reuse the exact same behaviour.
+ */
+public final class CountryInputHelper {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // constructors
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Non-instantiable; use static methods only. */
+  private CountryInputHelper() {}
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // static methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Prompts the user with {@code promptMessage}, normalises the input, and returns the
+   * corresponding {@link Country} once a valid name is entered. Invalid entries trigger an error
+   * message and another prompt.
+   *
+   * @param graph populated world graph to query
+   * @param promptMessage CLI message to display before each user prompt
+   * @return the validated {@link Country} (never {@code null})
+   */
+  public static Country promptForValidCountry(WorldGraph graph, MessageCli promptMessage) {
+
+    while (true) {
+      promptMessage.printMessage();
+
+      String userInput = Utils.scanner.nextLine();
+      String canonicalName = NameUtils.normalise(userInput);
+
+      try {
+        return graph.find(canonicalName); // success
+      } catch (InvalidCountryException ex) {
+        // Build error message with StringBuilder for consistency
+        StringBuilder errorMsg = new StringBuilder();
+        errorMsg.append(canonicalName);
+        MessageCli.INVALID_COUNTRY.printMessage(errorMsg.toString());
+      }
+    }
+  }
+}
+
+
+package nz.ac.auckland.se281.util;
+
+/**
+ * String-related helpers that replicate functionality in {@code Utils} without changing that class.
+ */
+public final class NameUtils {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // constructors
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Static-only utility – no instances allowed. */
+  private NameUtils() {}
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // static methods
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Trims the input and capitalises the first letter of every word.<br>
+   * Example: {@code "northwest territory" → "Northwest Territory"}.
+   *
+   * @param input raw user input (may be {@code null})
+   * @return normalised, title-cased string
+   */
+  public static String normalise(String input) {
+    if (input == null) {
+      input = "";
+    }
+    input = input.trim();
+
+    String[] tokens = input.split("\\s+");
+    StringBuilder builder = new StringBuilder();
+
+    for (String token : tokens) {
+      if (!token.isEmpty()) {
+        builder
+            .append(Character.toUpperCase(token.charAt(0)))
+            .append(token.length() > 1 ? token.substring(1) : "")
+            .append(' ');
+      }
+    }
+    return builder.toString().trim();
+  }
+}
+
+
+---------------------------
+MapEngine.java
+---------------------------
+package nz.ac.auckland.se281;
+
+import java.util.List;
+import java.util.StringJoiner;
+import nz.ac.auckland.se281.algorithms.PathFinder;
+import nz.ac.auckland.se281.algorithms.RouteResult;
+import nz.ac.auckland.se281.model.Country;
+import nz.ac.auckland.se281.model.WorldGraph;
+import nz.ac.auckland.se281.util.CountryInputHelper;
+
+/**
+ * High-level controller that loads the map data and dispatches CLI commands (`info-country`,
+ * `route`).
+ */
+public class MapEngine {
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance fields
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** In-memory graph built from the two CSV files. */
+  private final WorldGraph worldGraph;
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // constructors
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Builds the graph as soon as the engine is created. */
+  public MapEngine() {
+    worldGraph = loadMap();
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // instance methods (public API used by the CLI harness)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Handles the <code>info-country</code> command. */
+  public void showInfoCountry() {
+    Country country =
+        CountryInputHelper.promptForValidCountry(worldGraph, MessageCli.INSERT_COUNTRY);
+
+    /* Build neighbour list in insertion order with StringBuilder */
+    StringJoiner joiner = new StringJoiner(", ", "[", "]");
+    country.getNeighbours().stream().map(Country::getName).forEach(joiner::add);
+
+    MessageCli.COUNTRY_INFO.printMessage(
+        country.getName(),
+        country.getContinent().toString(),
+        String.valueOf(country.getFuelCost()),
+        joiner.toString());
+  }
+
+  /** Handles the <code>route</code> command. */
+  public void showRoute() {
+
+    // 1. prompt & validate endpoints
+    Country sourceCountry =
+        CountryInputHelper.promptForValidCountry(worldGraph, MessageCli.INSERT_SOURCE);
+    Country destinationCountry =
+        CountryInputHelper.promptForValidCountry(worldGraph, MessageCli.INSERT_DESTINATION);
+
+    // 2. trivial case: same country
+    if (sourceCountry.equals(destinationCountry)) {
+      MessageCli.NO_CROSSBORDER_TRAVEL.printMessage();
+      return;
+    }
+
+    // 3. compute route & stats
+    RouteResult routeResult = PathFinder.shortestRoute(sourceCountry, destinationCountry);
+
+    // 4. format path list with StringBuilder
+    StringJoiner pathJoiner = new StringJoiner(", ", "[", "]");
+    routeResult.countryPath.forEach(pathJoiner::add);
+
+    MessageCli.ROUTE_INFO.printMessage(pathJoiner.toString());
+    MessageCli.FUEL_INFO.printMessage(String.valueOf(routeResult.totalFuel));
+    MessageCli.CONTINENT_INFO.printMessage(routeResult.continentFuelFormatted.toString());
+    MessageCli.FUEL_CONTINENT_INFO.printMessage(routeResult.mostExpensiveContinentFormatted);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // private helpers
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Reads the two CSV files and builds a {@link WorldGraph}.
+   *
+   * @return populated graph
+   */
+  private static WorldGraph loadMap() {
+    List<String> countryLines = Utils.readCountries();
+    List<String> adjacencyLines = Utils.readAdjacencies();
+    return WorldGraph.fromCsvLines(countryLines, adjacencyLines);
+  }
+}
+
+
+---------------------------
+MessageCli.java
+---------------------------
+package nz.ac.auckland.se281;
+
+/** You cannot modify this class!. */
+public enum MessageCli {
+  COMMAND_NOT_FOUND(
+      "Error! Command not found! (run 'help' for the list of available commands): \"%s\""),
+  WRONG_ARGUMENT_COUNT(
+      "Error! Incorrect number of arguments provided. Expected %s argument%s for the \"%s\""
+          + " command"),
+  NO_COMMAND("Error! You did not give any command :)"),
+  END("You closed the terminal. Goodbye."),
+  // TASK 1
+  INSERT_COUNTRY("Insert the name of the country: "),
+  INVALID_COUNTRY("ERROR! This country was not found: %s, try again!"),
+  COUNTRY_INFO("%s => continent: %s, fuel cost: %s, neighbours: %s"),
+  // TASK 2
+  INSERT_SOURCE("Insert the name of the country where you start the journey: "),
+  INSERT_DESTINATION("Insert the name of the country of destination: "),
+  NO_CROSSBORDER_TRAVEL("No cross-border travel is required!"),
+  ROUTE_INFO("The fastest route is: %s"),
+  CONTINENT_INFO("You will visit the following continents: %s"),
+  FUEL_INFO("You will spend this amount of fuel for your journey: %s units"),
+  FUEL_CONTINENT_INFO("The continent where you will spend the most fuel is: %s");
+
+  private final String msg;
+
+  private MessageCli(final String msg) {
+    this.msg = msg;
+  }
+
+  /**
+   * Generates a formatted message using the provided arguments.
+   *
+   * @param args The arguments to replace placeholders in the message.
+   * @return The formatted message.
+   */
+  public String getMessage(final String... args) {
+    String tmpMessage = msg;
+
+    for (final String arg : args) {
+      tmpMessage = tmpMessage.replaceFirst("%s", arg);
+    }
+
+    return tmpMessage;
+  }
+
+  public void printMessage(final String... args) {
+    System.out.println(getMessage(args));
+  }
+
+  @Override
+  public String toString() {
+    return msg;
+  }
+}
+
+
+---------------------------
+Utils.java
+---------------------------
+package nz.ac.auckland.se281;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Scanner;
+
+/**
+ * Utility methods for common tasks.
+ *
+ * <p>CANNOT CHANGE EXISTING METHODS BUT YOU CAN ADD NEW ONES.
+ */
+public class Utils {
+
+  public static Scanner scanner = new Scanner(System.in);
+
+  public static List<String> readCountries() {
+    return readCsv("./src/main/resources/countries.csv");
+  }
+
+  public static List<String> readAdjacencies() {
+    return readCsv("./src/main/resources/adjacencies.csv");
+  }
+
+  /**
+   * read the content of a csv file.
+   *
+   * @param fileName of the csv file.
+   * @return a list of String, where each element is a line in the CSV file.
+   */
+  private static List<String> readCsv(String fileName) {
+    List<String> result = new LinkedList<>();
+
+    String line;
+    try (BufferedReader br = new BufferedReader(new FileReader(fileName))) {
+      while ((line = br.readLine()) != null) { //until the file has lines
+        result.add(line); 
+      }
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+
+    return result;
+  }
+
+  /**
+   * Capitalise the first letter of each word Example: "hello world" -> "Hello World".
+   *
+   * @param input the string to process.
+   * @return the input string with all words with first letter capitalised.
+   */
+  public static String capitalizeFirstLetterOfEachWord(String input) {
+    if (input == null || input.isEmpty()) {
+      return input; // Return the input if it's null or empty
+    }
+
+    String[] words = input.split("\\s+"); // Split the string by whitespace
+    StringBuilder capitalizedString = new StringBuilder();
+
+    for (String word : words) {
+      if (!word.isEmpty()) {
+        char firstChar = Character.toUpperCase(word.charAt(0));
+        String restOfString = word.length() > 1 ? word.substring(1) : "";
+        capitalizedString.append(firstChar).append(restOfString).append(" ");
+      }
+    }
+    // Remove the trailing space
+    return capitalizedString.toString().trim();
+  }
+}
