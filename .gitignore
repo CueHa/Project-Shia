@@ -1,0 +1,27 @@
+# Ignore logs and archived raw data
+Logs/
+Archive/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Compiled artifacts
+*.o
+*.out
+*.bin
+*.elf
+
+# ROS 2 build
+build/
+install/
+log/
+
+# Arduino / PlatformIO
+.pio/
+build/
+*.hex
+
+# System files
+.DS_Store
+Thumbs.db
